@@ -1,2 +1,3 @@
 # Simple_DBMS
-Linux coding homework with C++.
+Linux环境高级编程的大作业，C++完成。
+存储一张数据表，对表能进行查询、添加等操作，有索引和多线程并发要求。
