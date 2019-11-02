@@ -5,10 +5,12 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string>
+#include <map>
 #include "CLStatus.h"
 using namespace std;
 typedef long long int64_t;
 #define COLUMN_NUMS 100
+#define MAX_ROWS 1000000
 
 struct SRow{
 public:
@@ -21,11 +23,41 @@ public:
     int64_t atts[COLUMN_NUMS];        //属性
 };
 
+struct SIndexPair{
+public:
+    SIndexPair() { offset = -1; value = 0; }
+    off_t offset;
+    int64_t value;
+};
+
+struct SIndex{
+public:
+    SIndex(string att, int att_index, string filename) :
+        _att(att), _att_index(att_index), _filename(filename)  {
+        _fd = open(_filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+        _index_count = 0;
+    }
+    //向文件中写入新数据的索引
+    CLStatus WriteIndex();
+    //把文件中的特定索引删除
+    CLStatus RemoveIndex();
+    //从文件中读取全部索引
+    CLStatus ReadIndex();
+
+    string _att;                //索引的属性名称
+    int _att_index;             //索引属性的下标
+    string _filename;           //索引文件
+    int _fd;                    //索引的文件描述符
+    // map<off_t, int64_t> _index; //索引，key是文件偏移量，value是属性值
+    SIndexPair _index[MAX_ROWS]; //索引，文件偏移量和属性值
+    int _index_count;           //索引的数量，累积到一定程度写入文件
+};
+
 class CLTable{
 public:
     //构造函数
     CLTable();
-    CLTable(string name, string filename, string atts_name[]);
+    CLTable(string name, string filename, string atts_name[], string index_att);
     //查询搜索数据
     SRow* SelectReturn(string att_name, int64_t lo, int64_t hi);        //返回元组数组，未实现完毕，有bug
     CLStatus Select(string att_name, int64_t lo, int64_t hi);           //直接输出匹配的行，不返回SRow
@@ -54,7 +86,8 @@ private:
     int _fd;                                //文件描述符
     string _atts_name[COLUMN_NUMS];         //属性名
     // SRow *_rows;                            //元组
-    static const unsigned long max_rows = 1000000;  //最大行数
+    SIndex* _index;                          //索引
+    static unsigned long row_nums;          //当前行数
     static CLTable  *_pTable;               //用于GetInstance，全局只要一个表对象就可以了
 };
 

@@ -13,7 +13,7 @@ int main()
     if(s.IsSuccess()) cout << "成功添加数据" << endl;
     else cout << "添加数据失败" << endl;
     //测试查询搜索
-    CLTable::SelectData("50", 49, 52);
+    CLTable::SelectData("0", -1, 2);
 
     return 0;
 }

@@ -2,8 +2,9 @@
 // #include <fcntl.h>
 #include "CLTable.h"
 using namespace std;
-#define BUF_MAXSIZE 3000  //100位int64_t数据存入字符串最长长度
+// #define BUF_MAXSIZE 3000  //100位int64_t数据存入字符串最长长度
 
+unsigned long CLTable::row_nums = 0;
 CLTable* CLTable::_pTable = 0;
 
 //默认初始化构造
@@ -13,21 +14,36 @@ CLTable::CLTable() {
     for(int i = 0; i < COLUMN_NUMS; i++) _atts_name[i] = to_string(i);
     // _rows = NULL;
     _pTable = this;
-
     //打开文件，若不存在则创建文件
     _fd = open(_filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+
+    //索引初始化
+    _index = new SIndex(_atts_name[0], 0, _name + "Index");
+    CLStatus s = _index->ReadIndex();
+    if(!s.IsSuccess()) cout << "索引读取失败" << endl;
+
+    row_nums = _index->_index_count;
 }
 
+
 //指定name的构造函数
-CLTable::CLTable(string name, string filename, string atts_name[]) {
+CLTable::CLTable(string name, string filename, string atts_name[], string index_att) {
     _name = name;
     _filename = filename;
     for(int i = 0; i < COLUMN_NUMS; i++) _atts_name[i] = atts_name[i];
     // _rows = NULL;
     _pTable = this;
-
     //打开文件，若不存在则创建文件
     _fd = open(_filename.c_str(), O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+
+    //索引初始化
+    int index_att_index = 0;      //索引属性下标默认为0
+    for(int i = 0; i < COLUMN_NUMS; i++) if(_atts_name[i] == index_att) index_att_index = i;
+    _index = new SIndex(index_att, index_att_index, _filename + "Index");
+    CLStatus s = _index->ReadIndex();
+    if(!s.IsSuccess()) cout << "索引读取失败" << endl;
+
+    row_nums = _index->_index_count;
 }
 
 //可以直接通过类调用，不通过对象，在表格的末尾添加一行数据
@@ -42,6 +58,10 @@ CLStatus CLTable::InsertDataLast(SRow *row) {
 
 //在表格的末尾添加一行数据
 CLStatus CLTable::InsertLast(SRow *row) {
+    if(row_nums == MAX_ROWS) {
+        cout << "已达到最大行数，无法添加数据" << endl;
+        return CLStatus(-1, 0); 
+    }
     //若为null，可以手动输入一行数据
     if(!row) {
         row = new SRow();
@@ -60,18 +80,26 @@ CLStatus CLTable::InsertLast(SRow *row) {
     // buf += "\r\n";
 
     //写入元组，首先把文件偏移量转到最后
-    lseek(_fd, 0, SEEK_END);
     if(_fd == -1) 
         return CLStatus(-1, errno);
+    off_t currentPosition = lseek(_fd, 0, SEEK_END);    
     ssize_t writeBytes = write(_fd, row, sizeof(SRow));
     if(writeBytes == -1) {
         return CLStatus(-1, errno);
     }
+    row_nums++;
+
+    //同时写入索引
+    _index->_index[_index->_index_count].offset = currentPosition;
+    _index->_index[_index->_index_count].value = row->atts[_index->_att_index];
+    CLStatus s = _index->WriteIndex();
+    if(!s.IsSuccess()) cout << "索引写入失败" << endl;
+    else cout << "索引写入成功" << endl;
 
     return CLStatus(0, 0);
 }
 
-//
+//可以直接通过类调用，不通过对象，查询符合条件的元组
 CLStatus CLTable::SelectData(string att_name, int64_t lo, int64_t hi) {
     CLTable *pTable = CLTable::GetInstance();
     if(pTable == 0) return CLStatus(-1, 0);
@@ -89,15 +117,30 @@ CLStatus CLTable::Select(string att_name, int64_t lo, int64_t hi) {
     int att_num = -1;               //属性的列
     for(int i = 0; i < COLUMN_NUMS; i++) if(_atts_name[i] == att_name) att_num = i;
     if(_fd == -1) return CLStatus(-1, errno);
-    //检索元组，但首先要把文件偏移量转到开头
-    lseek(_fd, 0, SEEK_SET);
-    cout << "正在查询属性\"" << att_name << "\"大于" << lo << "小于等于" << hi << "的元组……" << endl;
-    while(count < 10) {
-        readBytes = read(_fd, &row, sizeof(row));
-        if(readBytes == -1) return CLStatus(-1, errno);
-        else if(readBytes == 0) break;
-        if(row.atts[att_num] > lo && row.atts[att_num] <= hi)
-            cout << row << endl;
+    //如果有索引，则直接在索引中查询
+    if(_index->_att == att_name) {
+        cout << "使用索引表查询属性\"" << att_name << "\"大于" << lo << "小于等于" << hi << "的元组……" << endl;
+        for(int i = 0; i < _index->_index_count; i++){ 
+            if(_index->_index[i].value > lo && _index->_index[i].value <= hi) {
+                lseek(_fd, _index->_index[i].offset, SEEK_SET);
+                ssize_t readBytes = read(_fd, &row, sizeof(row));
+                if(readBytes == -1) return CLStatus(-1, errno);
+                cout << row << endl;
+                count++;
+            }
+        }
+    }else {
+        //检索元组，但首先要把文件偏移量转到开头
+        lseek(_fd, 0, SEEK_SET);
+        cout << "正在查询属性\"" << att_name << "\"大于" << lo << "小于等于" << hi << "的元组……" << endl;
+        while(count < 10) {
+            readBytes = read(_fd, &row, sizeof(row));
+            if(readBytes == -1) return CLStatus(-1, errno);
+            else if(readBytes == 0) break;
+            if(row.atts[att_num] > lo && row.atts[att_num] <= hi)
+                cout << row << endl;
+            count++;
+        }
     }
     
     return CLStatus(0, 0);
@@ -157,4 +200,33 @@ CLTable* CLTable::GetInstance() {
         _pTable = new CLTable();
     
     return _pTable;
+}
+
+CLStatus SIndex::WriteIndex() {
+    if(_index_count == MAX_ROWS) {
+        cout << "已达到最大行数，无法添加数据" << endl;
+        return CLStatus(-1, 0);
+    }
+
+    if(_fd == -1) return CLStatus(-1, errno);
+    //文件偏移量移到末尾
+    lseek(_fd, 0, SEEK_END);    
+    ssize_t writeBytes = write(_fd, &_index[_index_count], sizeof(SIndexPair));
+    if(writeBytes == -1) 
+        return CLStatus(-1, errno);
+
+    _index_count++;
+    return CLStatus(0, 0);
+}
+
+CLStatus SIndex::ReadIndex() {
+    if(_fd == -1) return CLStatus(-1, errno);
+    //文件偏移量移到开头
+    lseek(_fd, 0, SEEK_SET);
+    ssize_t readBytes = read(_fd, _index, MAX_ROWS * sizeof(SIndexPair));
+    if(readBytes == -1) return CLStatus(-1, errno);
+    _index_count = readBytes / sizeof(SIndexPair);
+    cout << "初始化时索引数为" << _index_count << endl;
+
+    return CLStatus(0, 0);
 }
