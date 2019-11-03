@@ -12,6 +12,7 @@ typedef long long int64_t;
 #define COLUMN_NUMS 100
 #define MAX_ROWS 1000000
 
+//表的元组（行）项
 struct SRow{
 public:
     SRow() { for(int i = 0; i < COLUMN_NUMS; i++) atts[i] = 0; }
@@ -23,6 +24,7 @@ public:
     int64_t atts[COLUMN_NUMS];        //属性
 };
 
+//索引项
 struct SIndexPair{
 public:
     SIndexPair() { offset = -1; value = 0; }
@@ -30,6 +32,7 @@ public:
     int64_t value;
 };
 
+//索引结构体
 struct SIndex{
 public:
     SIndex(string att, int att_index, string filename) :
@@ -53,6 +56,7 @@ public:
     int _index_count;           //索引的数量，累积到一定程度写入文件
 };
 
+//数据表类，主类
 class CLTable{
 public:
     //构造函数
