@@ -6,6 +6,18 @@ using namespace std;
 
 unsigned long CLTable::row_nums = 0;
 CLTable* CLTable::_pTable = 0;
+pthread_mutex_t* CLTable::_pMutexForCreatingTable = CLTable::InitializeMutex();
+
+//初始化创建表的信号量
+pthread_mutex_t* CLTable::InitializeMutex() {
+    pthread_mutex_t* p = new pthread_mutex_t;
+    if(pthread_mutex_init(p, 0) != 0) {//初始化失败
+        delete p;
+        return 0;
+    }
+
+    return p;
+}
 
 //默认初始化构造
 CLTable::CLTable() {
@@ -13,16 +25,42 @@ CLTable::CLTable() {
     _filename = "table";
     for(int i = 0; i < COLUMN_NUMS; i++) _atts_name[i] = to_string(i);
     // _rows = NULL;
-    _pTable = this;
     //打开文件，若不存在则创建文件
     _fd = open(_filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    if(_fd == -1) throw "在CLTable::CLTable()初始化时, 打开文件失败";
+    //实例指针和退出标志
+    _pTable = this;
+    _bFlagProcessExit = false;
+    //初始化信号量
+    _pMutexForInsert = new pthread_mutex_t;
+    if(pthread_mutex_init(_pMutexForInsert, 0) != 0) {
+        delete _pMutexForInsert;
+        close(_fd);         
+        throw "在CLTable::CLTable()初始化时，信号量初始化失败";
+    }
 
     //索引初始化
-    _index = new SIndex(_atts_name[0], 0, _name + "Index");
-    CLStatus s = _index->ReadIndex();
-    if(!s.IsSuccess()) cout << "索引读取失败" << endl;
+    //读也需要加锁，因为插入的时候也会插入索引
+    if(pthread_mutex_lock(_pMutexForInsert) != 0) throw "在初始化加载索引时加锁失败";
+    try
+    {
+        _index = new SIndex(_atts_name[0], 0, _name + "Index");
+        CLStatus s = _index->ReadIndex();
+        if(!s.IsSuccess()) throw s;
 
-    row_nums = _index->_index_count;
+        row_nums = _index->_index_count;
+
+        throw CLStatus(0, 0);
+    }
+    catch(CLStatus &s)
+    {
+        //防止出错时不能解锁，必须先解锁，再处理错误
+        if(pthread_mutex_unlock(_pMutexForInsert) != 0) throw "在初始化加载索引时解锁失败";
+
+        if(!s.IsSuccess()) throw "索引读取失败";
+    }
+
+    // CLTable(_name, _filename, _atts_name, _atts_name[0]);
 }
 
 
@@ -31,19 +69,42 @@ CLTable::CLTable(string name, string filename, string atts_name[], string index_
     _name = name;
     _filename = filename;
     for(int i = 0; i < COLUMN_NUMS; i++) _atts_name[i] = atts_name[i];
-    // _rows = NULL;
-    _pTable = this;
     //打开文件，若不存在则创建文件
     _fd = open(_filename.c_str(), O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+    if(_fd == -1) throw "在CLTable::CLTable()初始化时, 打开文件失败";
+    //实例指针和退出标志
+    _pTable = this;
+    _bFlagProcessExit = false;
+    //初始化信号量
+    _pMutexForInsert = new pthread_mutex_t;
+    if(pthread_mutex_init(_pMutexForInsert, 0) != 0) {
+        delete _pMutexForInsert;
+        close(_fd);         
+        throw "在CLTable::CLTable()初始化时，信号量初始化失败";
+    }
 
     //索引初始化
-    int index_att_index = 0;      //索引属性下标默认为0
-    for(int i = 0; i < COLUMN_NUMS; i++) if(_atts_name[i] == index_att) index_att_index = i;
-    _index = new SIndex(index_att, index_att_index, _filename + "Index");
-    CLStatus s = _index->ReadIndex();
-    if(!s.IsSuccess()) cout << "索引读取失败" << endl;
+    //读也需要加锁，因为插入的时候也会插入索引
+    if(pthread_mutex_lock(_pMutexForInsert) != 0) throw "在初始化加载索引时加锁失败";
+    try
+    {
+        int index_att_index = 0;      //索引属性下标默认为0
+        for(int i = 0; i < COLUMN_NUMS; i++) if(_atts_name[i] == index_att) index_att_index = i;
+        _index = new SIndex(index_att, index_att_index, _filename + "Index");
+        CLStatus s = _index->ReadIndex();
+        if(!s.IsSuccess()) throw s;
 
-    row_nums = _index->_index_count;
+        row_nums = _index->_index_count;
+
+        throw CLStatus(0, 0);
+    }
+    catch(CLStatus& s)
+    {
+        if(pthread_mutex_unlock(_pMutexForInsert) != 0) throw "在初始化加载索引时解锁失败";
+
+        if(!s.IsSuccess()) throw "索引读取失败";
+    }
+    
 }
 
 //可以直接通过类调用，不通过对象，在表格的末尾添加一行数据
@@ -71,32 +132,38 @@ CLStatus CLTable::InsertLast(SRow *row) {
             cout << endl;
         }
     }
-    
-    //对元组进行处理，将其转换为字符串
-    // string buf;
-    // for(int i = 0; i < COLUMN_NUMS; i++) {
-    //     buf += to_string(row->atts[i]) + " ";
-    // }
-    // buf += "\r\n";
 
-    //写入元组，首先把文件偏移量转到最后
-    if(_fd == -1) 
-        return CLStatus(-1, errno);
-    off_t currentPosition = lseek(_fd, 0, SEEK_END);    
-    ssize_t writeBytes = write(_fd, row, sizeof(SRow));
-    if(writeBytes == -1) {
-        return CLStatus(-1, errno);
+    //写入元组，首先加锁，然后要先把文件偏移量转到最后
+    //尝试加锁，若失败则返回
+    if(pthread_mutex_lock(_pMutexForInsert) != 0) return CLStatus(-1, 0);
+    try
+    {
+        if(_fd == -1) throw CLStatus(-1, errno);
+        //移动文件偏移量至最后
+        off_t currentPosition = lseek(_fd, 0, SEEK_END);    
+        ssize_t writeBytes = write(_fd, row, sizeof(SRow));
+        if(writeBytes == -1) throw CLStatus(-1, errno);
+        row_nums++;
+
+        //同时写入索引
+        _index->_index[_index->_index_count].offset = currentPosition;
+        _index->_index[_index->_index_count].value = row->atts[_index->_att_index];
+        CLStatus s = _index->WriteIndex();
+        if(!s.IsSuccess()) {
+            cout << "索引写入失败" << endl;
+            throw s;
+        }
+        else cout << "索引写入成功" << endl;
+
+        throw CLStatus(0, 0);
     }
-    row_nums++;
+    catch(CLStatus& s) 
+    {
+        //解锁失败，返回
+        if(pthread_mutex_unlock(_pMutexForInsert) != 0) return CLStatus(-1, 0);
 
-    //同时写入索引
-    _index->_index[_index->_index_count].offset = currentPosition;
-    _index->_index[_index->_index_count].value = row->atts[_index->_att_index];
-    CLStatus s = _index->WriteIndex();
-    if(!s.IsSuccess()) cout << "索引写入失败" << endl;
-    else cout << "索引写入成功" << endl;
-
-    return CLStatus(0, 0);
+        return s;
+    }
 }
 
 //可以直接通过类调用，不通过对象，查询符合条件的元组
@@ -118,32 +185,44 @@ CLStatus CLTable::Select(string att_name, int64_t lo, int64_t hi) {
     for(int i = 0; i < COLUMN_NUMS; i++) if(_atts_name[i] == att_name) att_num = i;
     if(_fd == -1) return CLStatus(-1, errno);
     //如果有索引，则直接在索引中查询
-    if(_index->_att == att_name) {
-        cout << "使用索引表查询属性\"" << att_name << "\"大于" << lo << "小于等于" << hi << "的元组……" << endl;
-        for(int i = 0; i < _index->_index_count; i++){ 
-            if(_index->_index[i].value > lo && _index->_index[i].value <= hi) {
-                lseek(_fd, _index->_index[i].offset, SEEK_SET);
-                ssize_t readBytes = read(_fd, &row, sizeof(row));
-                if(readBytes == -1) return CLStatus(-1, errno);
-                cout << row << endl;
+    //首先加锁，因为其他线程在写也会影响到此处的读
+    if(pthread_mutex_lock(_pMutexForInsert) != 0) return CLStatus(-1, 0);
+    try
+    {
+        if(_index->_att == att_name) {
+            cout << "使用索引表查询属性\"" << att_name << "\"大于" << lo << "小于等于" << hi << "的元组……" << endl;
+            for(int i = 0; i < _index->_index_count; i++){ 
+                if(_index->_index[i].value > lo && _index->_index[i].value <= hi) {
+                    lseek(_fd, _index->_index[i].offset, SEEK_SET);
+                    ssize_t readBytes = read(_fd, &row, sizeof(row));
+                    if(readBytes == -1) return CLStatus(-1, errno);
+                    cout << row << endl;
+                    count++;
+                }
+            }
+        }else {
+                //检索元组，但首先要把文件偏移量转到开头
+            lseek(_fd, 0, SEEK_SET);
+            cout << "正在查询属性\"" << att_name << "\"大于" << lo << "小于等于" << hi << "的元组……" << endl;
+            while(count < 10) {
+                readBytes = read(_fd, &row, sizeof(row));
+                if(readBytes == -1) throw CLStatus(-1, errno);
+                else if(readBytes == 0) break;
+                if(row.atts[att_num] > lo && row.atts[att_num] <= hi)
+                    cout << row << endl;
                 count++;
             }
         }
-    }else {
-        //检索元组，但首先要把文件偏移量转到开头
-        lseek(_fd, 0, SEEK_SET);
-        cout << "正在查询属性\"" << att_name << "\"大于" << lo << "小于等于" << hi << "的元组……" << endl;
-        while(count < 10) {
-            readBytes = read(_fd, &row, sizeof(row));
-            if(readBytes == -1) return CLStatus(-1, errno);
-            else if(readBytes == 0) break;
-            if(row.atts[att_num] > lo && row.atts[att_num] <= hi)
-                cout << row << endl;
-            count++;
-        }
-    }
     
-    return CLStatus(0, 0);
+        throw CLStatus(0, 0);   
+    }
+    catch(CLStatus& s)
+    {
+        //先解锁，防止有异常解不了锁妨碍其他线程
+        if(pthread_mutex_unlock(_pMutexForInsert) != 0) return CLStatus(-1, 0);
+
+        return s;
+    }
 }
 
 //查询符合条件的元组（最大数量为10？这并不必要），返回元组数组的指针
@@ -195,11 +274,50 @@ CLTable::~CLTable() {
     if(_fd != -1) close(_fd);
 }
 
+
+//多线程情况下创建表需要加锁
 CLTable* CLTable::GetInstance() {
-    if(_pTable == 0)
-        _pTable = new CLTable();
+    //双检测机制，若有直接返回，免去下面不必要的加锁解锁
+    if(_pTable != 0) return _pTable;
+
+    if(_pMutexForCreatingTable == 0) return 0;
+    if(pthread_mutex_lock(_pMutexForCreatingTable) != 0) return 0;
+    if(_pTable == 0) {
+        try
+        {
+            _pTable = new CLTable();
+        }
+        catch(const char*)  //在初始化的时候throw除了字符串形式的异常
+        {
+            pthread_mutex_unlock(_pMutexForCreatingTable);
+            return 0;
+        }
+
+        if(atexit(CLTable::OnProcessExit) != 0) {
+            _pTable->_bFlagProcessExit = true;
+            if(pthread_mutex_unlock(_pMutexForCreatingTable) != 0) return 0;
+            cout << "在CLTable::GetInstance()中，atexit错误" << endl;
+        }else if(pthread_mutex_unlock(_pMutexForCreatingTable) != 0) return 0;
+
+        return _pTable;
+    }
+
+    if(pthread_mutex_unlock(_pMutexForCreatingTable) != 0) return 0;
     
     return _pTable;
+}
+
+
+//处理线程退出
+void CLTable::OnProcessExit() {
+    CLTable* pTable = CLTable::GetInstance();
+    if(pTable != 0) {
+        pthread_mutex_lock(pTable->_pMutexForInsert);
+        pTable->_bFlagProcessExit = true;
+        pthread_mutex_unlock(pTable->_pMutexForInsert);
+
+        //在这里可以加入缓存机制
+    }
 }
 
 CLStatus SIndex::WriteIndex() {

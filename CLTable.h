@@ -67,10 +67,10 @@ public:
     CLStatus Select(string att_name, int64_t lo, int64_t hi);           //直接输出匹配的行，不返回SRow
     static CLStatus SelectData(string att_name, int64_t lo, int64_t hi);//不用创建对象就可以查询数据
     //插入数据
-    CLStatus Insert();
+    CLStatus Insert();//暂未实现
     CLStatus InsertLast(SRow *row = NULL);
     static CLStatus InsertDataLast(SRow *row = NULL);   //不用创建对象就可以插入数据
-    //删除数据
+    //删除数据，暂未实现
     CLStatus Delete();
     //索引
     int index();
@@ -82,17 +82,22 @@ public:
 private:
     CLTable(const CLTable&);
     CLTable& operator=(const CLTable&);
+    static void OnProcessExit();
+    static pthread_mutex_t* InitializeMutex();
 
 private:
-    void CreateTableFile();
     string _name;                           //表名
     string _filename;                       //文件名
     int _fd;                                //文件描述符
     string _atts_name[COLUMN_NUMS];         //属性名
-    // SRow *_rows;                            //元组
-    SIndex* _index;                          //索引
     static unsigned long row_nums;          //当前行数
-    static CLTable  *_pTable;               //用于GetInstance，全局只要一个表对象就可以了
+    static CLTable* _pTable;                //用于GetInstance，全局只要一个表对象就可以了
+    bool _bFlagProcessExit;                 //程序是否退出的标志
+
+    SIndex* _index;                          //索引
+
+    static pthread_mutex_t* _pMutexForCreatingTable;//多线程下创建表的互斥信号量
+    pthread_mutex_t* _pMutexForInsert;      //多线程下插入操作的互斥信号量
 };
 
 #endif
