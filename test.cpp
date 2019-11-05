@@ -14,6 +14,7 @@ int main()
 {
     Test();
    
+    return 0;
 }
 
 void Test() {
