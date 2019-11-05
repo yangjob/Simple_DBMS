@@ -5,75 +5,32 @@
 // #include "CLExecutiveFunctionProvider.h"
 using namespace std;
 
-
-// struct SPara
-// {
-//     int Flag;
-//     pthread_mutex_t mutex;
-// };
-
-// class CLMyFunction : public CLExecutiveFunctionProvider
-// {
-// public:
-//     CLMyFunction()
-//     {
-//     }
-
-//     virtual ~CLMyFunction()
-//     {
-//     }
-
-//     virtual CLStatus RunExecutiveFunction(void *pContext)
-//     {
-//     SPara *p = (SPara*)pContext;
-
-//     pthread_mutex_lock(&(p->mutex));
-
-//     p->Flag++;
-
-//     pthread_mutex_unlock(&(p->mutex));
-
-//     return CLStatus(0, 0);
-//     }
-// };
-
+#define THREAD_NUM 10
+void Test();
+void* TestThreadForCLTable(void *arg);
+string atts_name[COLUMN_NUMS];
 
 int main()
 {
-    SRow row;
-    for(int i = 0; i < COLUMN_NUMS; i++) row.atts[i] = i;
-    //测试添加数据
-    CLStatus s = CLTable::InsertDataLast(&row);
-    //测试错误处理类
-    if(s.IsSuccess()) cout << "成功添加数据" << endl;
-    else cout << "添加数据失败" << endl;
-    //测试查询搜索
-    CLTable::SelectData("0", -1, 2);
+    Test();
+   
+}
 
-    // CLExecutiveFunctionProvider *myfunction = new CLMyFunction();
-    // CLExecutive *pThread = new CLThread(myfunction);
+void Test() {
+    for(int i = 0; i < COLUMN_NUMS; i++) atts_name[i] = to_string(i);
+    pthread_t tid[THREAD_NUM];
+    for(long i = 0; i < THREAD_NUM; i++) pthread_create(&tid[i], 0, TestThreadForCLTable, (void *)i);
+    for(long i = 0; i < THREAD_NUM; i++) pthread_join(tid[i], 0);
+}
 
-    // SPara *p = new SPara;
-    // p->Flag = 3;
-    // pthread_mutex_init(&(p->mutex), 0);
-
-    // pThread->Run((void *)p);
-    // // sleep(5);        //若没有这一步，则可能此线程先运行 ，输出4；否则必定创建的子线程先运行，最后输出5
-
-    // pthread_mutex_lock(&(p->mutex));
-
-    // p->Flag++;
-    // cout << p->Flag << endl;
-
-    // pthread_mutex_unlock(&(p->mutex));
-
-    // pThread->WaitForDeath();
-
-    // pthread_mutex_destroy(&(p->mutex));
-    // delete p;
-
-    // delete pThread;
-    // delete myfunction;
-
-    // return 0;
+void* TestThreadForCLTable(void *arg) {
+    long i = (long)arg;
+    for(int j = 0; j < 10; j++) {
+        if(i % 2 == 0) {
+            SRow row;
+            for(int k = 0; k < COLUMN_NUMS; k++) row.atts[k] = rand() % 200;
+            CLStatus s = CLTable::GetInstance()->InsertDataLast(&row);
+            if(s.IsSuccess()) cout << "插入成功" << endl;
+        }else CLTable::SelectData(atts_name[rand() % 100], rand() % 100, 100 + rand() % 100);
+    }
 }
