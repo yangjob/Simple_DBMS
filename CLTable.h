@@ -4,8 +4,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <pthread.h>
 #include <string>
-#include <map>
 #include "CLStatus.h"
 using namespace std;
 typedef long long int64_t;
