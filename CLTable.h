@@ -82,8 +82,12 @@ public:
 private:
     CLTable(const CLTable&);
     CLTable& operator=(const CLTable&);
+    //线程退出时的一些处理
     static void OnProcessExit();
+    //初始化创建数据表类的信号量
     static pthread_mutex_t* InitializeMutex();
+    //建立索引表
+    CLStatus BuildIndex();
 
 private:
     string _name;                           //表名

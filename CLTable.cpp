@@ -24,6 +24,7 @@ CLTable::CLTable() {
     _name = "table";
     _filename = "table";
     for(int i = 0; i < COLUMN_NUMS; i++) _atts_name[i] = to_string(i);
+    row_nums = 0;
     // _rows = NULL;
     //打开文件，若不存在则创建文件
     _fd = open(_filename.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
@@ -44,7 +45,16 @@ CLTable::CLTable() {
     if(pthread_mutex_lock(_pMutexForInsert) != 0) throw "在初始化加载索引时加锁失败";
     try
     {
-        _index = new SIndex(_atts_name[0], 0, _name + "Index");
+        _index = new SIndex(_atts_name[0], 0, _name + "Index" + _atts_name[0]);
+        //先检测指定属性索引的索引文件是否存在，若不存在需要建立索引
+        SIndexPair tmp;
+        ssize_t readBytes = read(_index->_fd, &tmp, sizeof(SIndexPair));
+        if(readBytes == -1) throw CLStatus(-1, 0);
+        else if(readBytes == 0) {//索引文件为空，建立索引文件
+            CLStatus s = BuildIndex(); 
+            if(!s.IsSuccess()) throw s;
+        }
+        //把索引文件读到内存中去
         CLStatus s = _index->ReadIndex();
         if(!s.IsSuccess()) throw s;
 
@@ -69,6 +79,7 @@ CLTable::CLTable(string name, string filename, string atts_name[], string index_
     _name = name;
     _filename = filename;
     for(int i = 0; i < COLUMN_NUMS; i++) _atts_name[i] = atts_name[i];
+    row_nums = 0;
     //打开文件，若不存在则创建文件
     _fd = open(_filename.c_str(), O_RDWR | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
     if(_fd == -1) throw "在CLTable::CLTable()初始化时, 打开文件失败";
@@ -90,7 +101,16 @@ CLTable::CLTable(string name, string filename, string atts_name[], string index_
     {
         int index_att_index = 0;      //索引属性下标默认为0
         for(int i = 0; i < COLUMN_NUMS; i++) if(_atts_name[i] == index_att) index_att_index = i;
-        _index = new SIndex(index_att, index_att_index, _filename + "Index");
+        _index = new SIndex(index_att, index_att_index, _filename + "Index" + _atts_name[0]);
+        //先检测指定属性索引的索引文件是否存在，若不存在需要建立索引
+        SIndexPair tmp;
+        ssize_t readBytes = read(_index->_fd, &tmp, sizeof(SIndexPair));
+        if(readBytes == -1) throw CLStatus(-1, 0);
+        else if(readBytes == 0) {//索引文件为空，建立索引文件
+            CLStatus s = BuildIndex(); 
+            if(!s.IsSuccess()) throw s;
+        }
+        //把索引文件读到内存中去
         CLStatus s = _index->ReadIndex();
         if(!s.IsSuccess()) throw s;
 
@@ -318,6 +338,30 @@ void CLTable::OnProcessExit() {
 
         //在这里可以加入缓存机制
     }
+}
+
+
+CLStatus CLTable::BuildIndex() {
+    SRow row;
+    SIndexPair sIP;
+    ssize_t readBytes = 0;
+    lseek(_fd, 0, SEEK_SET);
+    lseek(_index->_fd, 0, SEEK_SET);
+    while(1) {
+        //这一行的文件偏移量正是读这一行之前的当前文件偏移量
+        sIP.offset = lseek(_fd, 0, SEEK_CUR);
+        readBytes = read(_fd, &row, sizeof(row));
+        if(readBytes == -1) return CLStatus(-1, errno);
+        else if(readBytes == 0) break;
+        sIP.value = row.atts[_index->_att_index];   //索引属性值
+        //将读到的这一行的索引到索引文件里去
+        ssize_t writeBytes = write(_index->_fd, &sIP, sizeof(SIndexPair));
+        if(writeBytes == -1) return CLStatus(-1, errno);
+
+        _index->_index_count++;
+    }
+
+    return CLStatus(0, 0);
 }
 
 CLStatus SIndex::WriteIndex() {
