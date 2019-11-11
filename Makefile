@@ -1,5 +1,5 @@
 main : test.o CLStatus.o CLTable.o 
-	g++ -o test test.o CLStatus.o CLTable.o
+	g++ -o test test.o CLStatus.o CLTable.o -lpthread
 	rm *.o
 
 test.o : test.cpp

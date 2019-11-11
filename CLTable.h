@@ -8,7 +8,7 @@
 #include <string>
 #include "CLStatus.h"
 using namespace std;
-typedef long long int64_t;
+// typedef long long int64_t;
 #define COLUMN_NUMS 100
 #define MAX_ROWS 1000000
 
@@ -72,14 +72,13 @@ public:
     static CLStatus InsertDataLast(SRow *row = NULL);   //不用创建对象就可以插入数据
     //删除数据，暂未实现
     CLStatus Delete();
-    //索引
-    int index();
     //析构函数
     virtual ~CLTable();
     //得到表对象 
     static CLTable* GetInstance();
 
 private:
+    //暂未实现
     CLTable(const CLTable&);
     CLTable& operator=(const CLTable&);
     //线程退出时的一些处理
